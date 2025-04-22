@@ -38,12 +38,106 @@ from rclpy.action import ActionClient
 from nav2_msgs.action import NavigateToPose
 from geometry_msgs.msg import PoseStamped
 import math
+import time
+
 
 class GridNode:
     def __init__(self, x, y):
-        print("function", "__init__")
         self.x = x
         self.y = y
+
+class myOccupancyGrid:
+    def __init__(self, map_data, resolution):
+        """
+        Args:
+            map_data (np.array): 2D occupancy grid.
+            resolution (float): Size of each cell in meters.
+        """
+        self.map_data = map_data
+        self.resolution = resolution
+        self.map_height = map_data.shape[0]
+        self.map_width = map_data.shape[1]
+
+    def compute_visible_unknown(self, node, max_distance=3):
+        """
+        For a given node, count how many unknown cells (value -1)
+        are visible by casting rays in 36 directions up to max_distance.
+        
+        Args:
+            node: An object with attributes 'x' and 'y' (meters).
+            max_distance (float): Maximum distance (in meters) for each ray.
+        
+        Returns:
+            int: Total number of unknown cells encountered.
+        """
+        directions = 36
+        max_cells = int(max_distance / self.resolution)
+        total_unknown = 0
+        for d in range(directions):
+            angle = 2 * math.pi * d / directions
+            total_unknown += self.ray_cast_unknown(node, angle, max_cells)
+        return total_unknown
+
+    def ray_cast_unknown(self, node, angle, max_cells):
+        """
+        Cast a ray from the node and count unknown cells (-1) until an obstacle (100)
+        is encountered or the ray goes out of bounds.
+        
+        Args:
+            node: An object with attributes 'x' and 'y' (meters).
+            angle (float): Angle in radians.
+            max_cells (int): Maximum steps along the ray.
+        
+        Returns:
+            int: Count of unknown cells seen along this ray.
+        """
+        origin_x, origin_y = node.x, node.y
+        count = 0
+        for step in range(1, max_cells + 1):
+            rx = origin_x + step * self.resolution * math.cos(angle)
+            ry = origin_y + step * self.resolution * math.sin(angle)
+            col = int(rx / self.resolution)
+            row = int(ry / self.resolution)
+            if not (0 <= row < self.map_height and 0 <= col < self.map_width):
+                break
+            val = self.map_data[row, col]
+            if val == -1:
+                count += 1
+            elif val == 100:  # obstacle encountered
+                break
+        return count
+
+    def get_rays(self, node, max_distance=3):
+        """
+        Compute the endpoint of each ray cast from the node for visualization.
+        
+        Args:
+            node: An object with attributes 'x' and 'y' (meters).
+            max_distance (float): Maximum distance for each ray.
+        
+        Returns:
+            list of tuples: Each tuple is (x_start, y_start, x_end, y_end).
+        """
+        directions = 36
+        max_cells = int(max_distance / self.resolution)
+        rays = []
+        for d in range(directions):
+            angle = 2 * math.pi * d / directions
+            origin_x, origin_y = node.x, node.y
+            last_valid = (origin_x, origin_y)
+            for step in range(1, max_cells + 1):
+                rx = origin_x + step * self.resolution * math.cos(angle)
+                ry = origin_y + step * self.resolution * math.sin(angle)
+                col = int(rx / self.resolution)
+                row = int(ry / self.resolution)
+                if not (0 <= row < self.map_height and 0 <= col < self.map_width):
+                    break
+                val = self.map_data[row, col]
+                if val == 100:
+                    break
+                last_valid = (rx, ry)
+            rays.append((origin_x, origin_y, last_valid[0], last_valid[1]))
+        return rays
 
 
 class Lecture0(Node):
@@ -72,6 +166,8 @@ class Lecture0(Node):
         self.map_data = None
         self.prev_map_data = None
 
+        self.last_map_msg = None
+
         self.information_gains = None
         self.to_generate = True
 
@@ -84,8 +180,21 @@ class Lecture0(Node):
         self.robot_x = 0
         self.robot_y = 0
 
-        self.gain_prev = [0] * self.amount_of_nodes
 
+        self.goal_reached = True
+
+        self.gain_prev = [0] * self.amount_of_nodes
+        self.best_node_index_prev = None
+
+        # add a timer in case the robot gets stuck so we can regenerate the nodes
+        self.timer = self.node.create_timer(1.0, self.timer_callback)
+        self.timeout = time.time() + 3600 # init to 1 hour
+
+    def timer_callback(self):
+        if(time.time() > self.timeout):
+            print("timeout")
+            self.to_generate = True
+            self.goal_reached = True
 
     def callback_pose(self, msg):
         # set t
@@ -94,57 +203,38 @@ class Lecture0(Node):
 
 
     def callback_map(self, msg):
-        print("function", "callback_map")
         print("map received")
-        if(not self.nodes_init):
-            self.nodes_init = True
+        self.latest_map_msg = msg
+        if(self.to_generate):
+            self.random_nodes = self.generate_random_nodes(msg)
+            self.to_generate = False
+        self.resolution = msg.info.resolution
+        self.map_height = msg.info.height
+        self.map_width = msg.info.width
+        self.map_data = np.array(msg.data).reshape((self.map_height, self.map_width))
 
-            # printe what I get in the map
-            print("map data")
-            # print a list of all the elements in the "msg" object
-            print(dir(msg))
-            print("info", msg.info)
-            # prin the shape of the map
-            print("shape", np.array(msg.data).shape)
-            # convert the data to a matrix
-            print("data", np.array(msg.data))
+        if(not self.goal_reached):
+            return
 
+        self.information_gains = self.compute_information_gain()
+        print("information gains computed", self.information_gains)
+        best_node_index = self.select_best_node()
+        best_node = self.random_nodes[best_node_index]
+        # remove that node
+        self.random_nodes.pop(best_node_index)
+        # we check afterwards if we can 
 
-            self.resolution = msg.info.resolution
-            self.map_height = msg.info.height
-            self.map_width = msg.info.width
-            self.prev_map_data = self.map_data
-            self.map_data = np.array(msg.data).reshape((self.map_height, self.map_width))
-
-            if(self.prev_map_data is not None):
-                # check if the map has changed
-                if(np.array_equal(self.prev_map_data, self.map_data)):
-                    print("map has not changed")
-                else:
-                    print("map has changed")
-                    exit()
-
-            if(self.to_generate):
-                self.random_nodes = self.generate_random_nodes(msg)
-                self.to_generate = False
-            # compute the information gain for each node
-            self.information_gains = self.compute_information_gain()
-            print("information gains", self.information_gains)
-            # Select the node with the highest gain
-            best_node_index = self.select_best_node()
-            best_node = self.random_nodes[best_node_index]
-
-            # Navigate to the selected node
-            self.navigate_to_node(best_node)
-
-
-
-            # reshape the data to a 3D matrix with the shape (height, width, 1)
-            # publish the nodes
+        self.goal_reached = False
+        print("naivigation to node", best_node)
+        self.timeout = time.time() + 30
+        self.navigate_to_node(best_node)
+        # clear the information_gains
+        self.information_gains = None
+        
         self.publish_nodes()
 
+
     def compute_visible_unknown(self, node, max_distance=3):
-        print("function", "compute_visible_unknown")
         """
         For a given node, count how many unknown cells (value -1)
         are visible by casting rays in 36 directions up to max_distance.
@@ -187,7 +277,6 @@ class Lecture0(Node):
             if not (0 <= row < self.map_height and 0 <= col < self.map_width):
                 break
             val = self.map_data[row, col]
-            print("map_data", row, col, val)
             if val == -1:
                 count += 1
             elif val == 100:  # obstacle encountered
@@ -228,43 +317,28 @@ class Lecture0(Node):
         return rays
 
     def compute_information_gain(self):
-        print("function", "compute_information_gain")
-        print("Computing information gain for each node")
         information_gains = []
-        index_node = 0
+        grid = myOccupancyGrid(self.map_data, self.resolution)
         for node_coords in self.random_nodes:
             # # Create a Node object for the current node
             node = GridNode(node_coords[0], node_coords[1])
-
             # # Compute the visible unknown cells
-            visible_unknown = self.compute_visible_unknown(node, max_distance=0.1)#=3)
-            print("x", node.x, "y", node.y, "visible unknown", visible_unknown)
+            visible_unknown = grid.compute_visible_unknown(node, max_distance=3)
+            print("Visible unknown cells:", visible_unknown)
 
             # dompute the distance to the node
-            # distance = math.sqrt((node.x - self.robot_x)**2 + (node.y - self.robot_y)**2)
-            # gain = visible_unknown * math.exp(-distance)
-            # gain = self.gain_prev[index_node] + visible_unknown * math.exp(-distance)
-            gain = visible_unknown
-            self.gain_prev[index_node] = gain
-            index_node += 1
-
-
-
-
-
+            distance = math.sqrt((node.x - self.robot_x)**2 + (node.y - self.robot_y)**2)
+            gain = visible_unknown* math.exp(-distance)
+            # TODO: add the gain of the previous node / do it with a tree
             information_gains.append(gain)
         return information_gains
 
     def select_best_node(self):
-        print("function", "select_best_node")
-        # Find the index of the node with the highest information gain
-        best_node_index = int(np.argmax(self.information_gains))
-        print(f"Best node selected: {self.random_nodes[best_node_index]} with gain {self.information_gains[best_node_index]}")
+        copy_of_information_gains = self.information_gains.copy()
+        best_node_index = copy_of_information_gains.index(max(copy_of_information_gains))
         return best_node_index
 
     def navigate_to_node(self, node):
-        print("function", "navigate_to_node")
-        print(f"Navigating to node: {node}")
         goal_msg = NavigateToPose.Goal()
         goal_msg.pose.header.frame_id = "map"
         goal_msg.pose.header.stamp = self.node.get_clock().now().to_msg()
@@ -279,10 +353,8 @@ class Lecture0(Node):
 
     def feedback_callback(self, feedback_msg):
         feedback = feedback_msg.feedback
-        # print(f"Feedback: {feedback}")
 
     def goal_response_callback(self, future):
-        print("function", "goal_response_callback")
         goal_handle = future.result()
         if not goal_handle.accepted:
             print("Goal rejected")
@@ -296,15 +368,12 @@ class Lecture0(Node):
         print("function", "result_callback")
         result = future.result().result
         print(f"Result: {result}")
-        print("Reevaluating nodes...")
-        self.nodes_init = False 
-        # Reevaluate the nodes and select the next one
-        # self.callback_map(self.latest_map_msg)
+        if(len(self.random_nodes) == 0):
+            self.to_generate = True
+        self.goal_reached = True
 
 
     def publish_nodes(self):
-        print("function", "publish_nodes")
-        print("publishing nodes")
         # create the markers
         markers = MarkerArray()
         for i in range(len(self.random_nodes)):
@@ -316,7 +385,6 @@ class Lecture0(Node):
             marker.action = marker.ADD
             marker.pose.position.x = self.random_nodes[i][0]
             marker.pose.position.y = self.random_nodes[i][1]
-            print("node", marker.pose.position.x, marker.pose.position.y)
             marker.pose.position.z = 0.5
             marker.scale.x = 0.2
             marker.scale.y = 0.2
@@ -331,8 +399,6 @@ class Lecture0(Node):
         self.publisher.publish(markers)
 
     def generate_random_nodes(self, msg):
-        print("function", "generate_random_nodes")
-        print("Generating random nodes")
         random_nodes = []
 
         # Get the origin of the map
@@ -358,12 +424,7 @@ class Lecture0(Node):
             
 
 
-
-
-
-
 def main():
-    print("week 9 exercises")
     rclpy.init()
     node = Lecture0()
     rclpy.spin(node.node)
