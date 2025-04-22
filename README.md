@@ -5,5 +5,3 @@
 source setup.sh
 ## Run the simulation to generate map
 ros2 launch my_turtlebot turtlebot_simulation.launch.py slam:=True
-## Run the simulation
-ros2 launch my_turtlebot turtbot_simulation.launch.py
