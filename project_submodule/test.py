@@ -61,20 +61,36 @@ class Lecture0(Node):
         # publisher to "prm_markers"
         self.publisher = self.node.create_publisher(MarkerArray, "prm_markers", 10)
         self.publisher
+        # subscribe to the pose
+        self.pose_subscription = self.node.create_subscription(PoseStamped, "/amcl_pose", self.callback_pose, 10)
+        self.pose_subscription
 
         self.resolution = 0.05
 
         self.map_height = None
         self.map_width = None
         self.map_data = None
+        self.prev_map_data = None
 
         self.information_gains = None
+        self.to_generate = True
 
         # Action client for navigation
         self.action_client = ActionClient(self.node, NavigateToPose, '/navigate_to_pose')
         self.action_client
         print("out")
 
+        # set the pose of the robot
+        self.robot_x = 0
+        self.robot_y = 0
+
+        self.gain_prev = [0] * self.amount_of_nodes
+
+
+    def callback_pose(self, msg):
+        # set t
+        self.robot_x = msg.pose.position.x
+        self.robot_y = msg.pose.position.y
 
 
     def callback_map(self, msg):
@@ -97,12 +113,23 @@ class Lecture0(Node):
             self.resolution = msg.info.resolution
             self.map_height = msg.info.height
             self.map_width = msg.info.width
+            self.prev_map_data = self.map_data
             self.map_data = np.array(msg.data).reshape((self.map_height, self.map_width))
 
-            self.random_nodes = self.generate_random_nodes(msg)
-            # self.random_nodes = self.generate_random_nodes()
+            if(self.prev_map_data is not None):
+                # check if the map has changed
+                if(np.array_equal(self.prev_map_data, self.map_data)):
+                    print("map has not changed")
+                else:
+                    print("map has changed")
+                    exit()
+
+            if(self.to_generate):
+                self.random_nodes = self.generate_random_nodes(msg)
+                self.to_generate = False
             # compute the information gain for each node
             self.information_gains = self.compute_information_gain()
+            print("information gains", self.information_gains)
             # Select the node with the highest gain
             best_node_index = self.select_best_node()
             best_node = self.random_nodes[best_node_index]
@@ -138,7 +165,6 @@ class Lecture0(Node):
         return total_unknown
 
     def ray_cast_unknown(self, node, angle, max_cells):
-        print("function", "ray_cast_unknown")
         """known or occupied re
         Cast a ray from the node and count unknown cells (-1) until an obstacle (100)
         is encountered or the ray goes out of bounds.
@@ -161,6 +187,7 @@ class Lecture0(Node):
             if not (0 <= row < self.map_height and 0 <= col < self.map_width):
                 break
             val = self.map_data[row, col]
+            print("map_data", row, col, val)
             if val == -1:
                 count += 1
             elif val == 100:  # obstacle encountered
@@ -204,16 +231,26 @@ class Lecture0(Node):
         print("function", "compute_information_gain")
         print("Computing information gain for each node")
         information_gains = []
+        index_node = 0
         for node_coords in self.random_nodes:
-            # Create a Node object for the current node
+            # # Create a Node object for the current node
             node = GridNode(node_coords[0], node_coords[1])
 
-            # Compute the visible unknown cells
-            visible_unknown = self.compute_visible_unknown(node, max_distance=3)
+            # # Compute the visible unknown cells
+            visible_unknown = self.compute_visible_unknown(node, max_distance=0.1)#=3)
+            print("x", node.x, "y", node.y, "visible unknown", visible_unknown)
 
-            # Apply the exponential decay factor
-            distance = 0  # Replace with the actual distance if needed
-            gain = visible_unknown * math.exp(-distance)
+            # dompute the distance to the node
+            # distance = math.sqrt((node.x - self.robot_x)**2 + (node.y - self.robot_y)**2)
+            # gain = visible_unknown * math.exp(-distance)
+            # gain = self.gain_prev[index_node] + visible_unknown * math.exp(-distance)
+            gain = visible_unknown
+            self.gain_prev[index_node] = gain
+            index_node += 1
+
+
+
+
 
             information_gains.append(gain)
         return information_gains
@@ -241,7 +278,6 @@ class Lecture0(Node):
         self._send_goal_future.add_done_callback(self.goal_response_callback)
 
     def feedback_callback(self, feedback_msg):
-        print("function", "feedback_callback")
         feedback = feedback_msg.feedback
         # print(f"Feedback: {feedback}")
 
