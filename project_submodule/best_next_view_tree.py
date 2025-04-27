@@ -218,8 +218,6 @@ class ExploratorNode(Node):
         self.tree_publisher
 
         # subscribe to the pose
-        # self.pose_subscription = self.node.create_subscription(PoseStamped, "/amcl_pose", self.callback_pose, 10)
-        # self.pose_subscription
         self.odom_subscription = self.node.create_subscription(Odometry, "/odom", self.callback_pose, 10)
         self.odom_subscription
 
@@ -383,15 +381,15 @@ class ExploratorNode(Node):
                 last_valid = (rx, ry)
             rays.append((origin_x, origin_y, last_valid[0], last_valid[1]))
         return rays
-
-    def compute_information_gain_rrt(self, root_node, max_depth=2, max_distance=3):
+    def compute_information_gain_rrt(self, root_node, max_depth=2, max_distance=3, lambda_factor=0.1):
         """
-        Compute information gain using a tree-based exploration (RRT).
+        Compute information gain using a tree-based exploration (RRT) with a discounting factor.
         
         Args:
             root_node (TreeNode): The root node of the RRT.
             max_depth (int): Maximum depth of the tree.
             max_distance (float): Maximum distance for each ray.
+            lambda_factor (float): Tuning factor for the discounting factor.
 
         Returns:
             TreeNode: The node with the highest cumulative information gain.
@@ -409,30 +407,36 @@ class ExploratorNode(Node):
             for node in tree:
                 # Generate random child nodes anywhere in the map
                 for _ in range(5):  # Number of children per node
-                    # Generate random grid indices (col, row)
-                    col = random.randint(0, self.map_width - 1)
-                    row = random.randint(0, self.map_height - 1)
+                    # Generate random coordinates within the map bounds
+                    new_x = random.uniform(origin_x, origin_x + self.map_width * resolution)
+                    new_y = random.uniform(origin_y, origin_y + self.map_height * resolution)
 
-                    # Compute the corresponding x and y coordinates
-                    new_x = origin_x + col * resolution
-                    new_y = origin_y + row * resolution
+                    # Convert to grid indices
+                    col = int((new_x - origin_x) / resolution)
+                    row = int((new_y - origin_y) / resolution)
 
                     # Check if the cell is free
+                    if not (0 <= row < self.map_height and 0 <= col < self.map_width):
+                        continue
                     if self.map_data[row, col] != 0:  # Skip if the cell is not free
                         continue
 
-                    # Calculate information gain for the new node
+                    # Calculate the cost (Euclidean distance) from the parent node
+                    cost = math.sqrt((new_x - node.x) ** 2 + (new_y - node.y) ** 2)
+
+                    # Calculate the visible unknown cells
                     grid_node = GridNode(new_x, new_y)
                     visible_unknown = self.compute_visible_unknown(grid_node, max_distance)
-                    print(f"Visible unknown for node ({new_x:2.2f}, {new_y:2.2f}): {visible_unknown:2.3f}")
-                    cumulative_gain = node.gain + visible_unknown
+
+                    # Apply the gain formula with the discounting factor
+                    gain = node.gain + visible_unknown * math.exp(-lambda_factor * cost)
 
                     # Create a new tree node
-                    new_node = TreeNode(new_x, new_y, parent=node, gain=cumulative_gain)
+                    new_node = TreeNode(new_x, new_y, parent=node, gain=gain)
                     new_nodes.append(new_node)
 
                     # Update the best node
-                    if cumulative_gain > best_node.gain:
+                    if gain > best_node.gain:
                         best_node = new_node
 
             print("Adding new nodes to the tree", len(new_nodes))
