@@ -46,7 +46,9 @@ class GridNode:
         self.x = x
         self.y = y
 
-class myOccupancyGrid:
+
+
+class VisibilityComputation:
     def __init__(self, map_data, resolution):
         """
         Args:
@@ -140,7 +142,7 @@ class myOccupancyGrid:
         return rays
 
 
-class Lecture0(Node):
+class ExploratorNode(Node):
     def __init__(self):
         print("function", "__init__")
         self.node = rclpy.create_node("update_map")
@@ -318,7 +320,7 @@ class Lecture0(Node):
 
     def compute_information_gain(self):
         information_gains = []
-        grid = myOccupancyGrid(self.map_data, self.resolution)
+        grid = VisibilityComputation(self.map_data, self.resolution)
         for node_coords in self.random_nodes:
             # # Create a Node object for the current node
             node = GridNode(node_coords[0], node_coords[1])
@@ -426,7 +428,7 @@ class Lecture0(Node):
 
 def main():
     rclpy.init()
-    node = Lecture0()
+    node = ExploratorNode()
     rclpy.spin(node.node)
     rclpy.shutdown()
 
