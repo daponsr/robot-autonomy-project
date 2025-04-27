@@ -158,8 +158,10 @@ class ExploratorNode(Node):
         self.publisher = self.node.create_publisher(MarkerArray, "prm_markers", 10)
         self.publisher
         # subscribe to the pose
-        self.pose_subscription = self.node.create_subscription(PoseStamped, "/amcl_pose", self.callback_pose, 10)
-        self.pose_subscription
+        # self.pose_subscription = self.node.create_subscription(PoseStamped, "/amcl_pose", self.callback_pose, 10)
+        # self.pose_subscription
+        self.odom_subscription = self.node.create_subscription(Odometry, "/odom", self.callback_pose, 10)
+        self.odom_subscription
 
         self.resolution = 0.05
 
@@ -179,8 +181,8 @@ class ExploratorNode(Node):
         print("out")
 
         # set the pose of the robot
-        self.robot_x = 0
-        self.robot_y = 0
+        self.robot_x = None
+        self.robot_y = None
 
 
         self.goal_reached = True
@@ -199,13 +201,16 @@ class ExploratorNode(Node):
             self.goal_reached = True
 
     def callback_pose(self, msg):
-        # set t
-        self.robot_x = msg.pose.position.x
-        self.robot_y = msg.pose.position.y
+        # set the pose of the robot
+        self.robot_x = msg.pose.pose.position.x
+        self.robot_y = msg.pose.pose.position.y
 
 
     def callback_map(self, msg):
         print("map received")
+        if(self.robot_x is None or self.robot_y is None):
+            print("robot pose not set")
+            return
         self.latest_map_msg = msg
         if(self.to_generate):
             self.random_nodes = self.generate_random_nodes(msg)
