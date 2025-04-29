@@ -290,7 +290,8 @@ class ExploratorNode(Node):
         root_node = TreeNode(self.robot_x, self.robot_y)
         print("Root node:", (root_node.x, root_node.y))
         # best_node = self.compute_information_gain_rrt(root_node)
-        best_node = self.compute_information_gain_rrt_frontier(root_node)
+        # best_node = self.compute_information_gain_rrt_frontier(root_node)
+        self.compute_information_gain_rrt_easy(root_node)
         path_to_best_node = self.reconstruct_path(best_node)
         print("Path to best node:", path_to_best_node)
 
@@ -406,7 +407,7 @@ class ExploratorNode(Node):
                         y = self.latest_map_msg.info.origin.position.y + row * self.resolution
                         frontier_cells.append((x, y))
         return frontier_cells
-    def compute_information_gain_rrt_frontier(self, root_node, max_depth=2, max_distance=3, lambda_factor=0.1, frontier_bias=0.7):
+    def compute_information_gain_rrt_frontier(self, root_node, max_depth=2, max_distance=3, lambda_factor=1, frontier_bias=0.7):
         """
         Compute information gain using a tree-based exploration (RRT) with a bias toward frontier cells.
         
@@ -431,11 +432,15 @@ class ExploratorNode(Node):
         # Find frontier cells
         frontier_cells = self.find_frontier_cells()
 
-        for depth in range(max_depth):
+        for depth in range(2):
             new_nodes = []
             for node in tree:
                 # Generate random child nodes
-                for _ in range(5):  # Number of children per node
+                # for _ in range(3):  # Number of children per node
+                i = 0
+                attempts = 0
+                while((i < 2) and (attempts < 100)):
+                    attempts += 1
                     if random.random() < frontier_bias and frontier_cells:
                         # Bias toward frontier: Select a random frontier cell
                         frontier_x, frontier_y = random.choice(frontier_cells)
@@ -455,6 +460,8 @@ class ExploratorNode(Node):
                         continue
                     if self.map_data[row, col] != 0:  # Skip if the cell is not free
                         continue
+
+                    i += 1
 
                     # Calculate the cost (Euclidean distance) from the parent node
                     cost = math.sqrt((new_x - node.x) ** 2 + (new_y - node.y) ** 2)
@@ -482,9 +489,77 @@ class ExploratorNode(Node):
 
         return best_node
 
+    def generate_random_nodes_valid(self, root, amount, max_distance = 3.0, angle_limit = [0, 2*math.pi]):
+        generate_nodes = []
+        while(len(generate_nodes) < amount):
+            # generate a random node
+            new_x = random.uniform(root.x - max_distance, root.x + max_distance)
+            new_y = random.uniform(root.y - max_distance, root.y + max_distance)
+            # compute the agle from the root to the node
+            angle = math.atan2(new_y - root.y, new_x - root.x)
+            if(angle < angle_limit[0] or angle > angle_limit[1]):
+                continue
+
+            # check if the node is valid
+            col = int((new_x - self.latest_map_msg.info.origin.position.x) / self.latest_map_msg.info.resolution)
+            row = int((new_y - self.latest_map_msg.info.origin.position.y) / self.latest_map_msg.info.resolution)
+
+            if not (0 <= row < self.map_height and 0 <= col < self.map_width):
+                continue
+            if self.map_data[row, col] != 0:
+                continue
+            append_node = TreeNode(new_x, new_y, parent=root)
+            generate_nodes.append(append_node)
+        print("generated nodes", len(generate_nodes))
+        return generate_nodes
+
+    def compute_information_gain_rrt_easy(self, root_node, max_depth=2, max_distance=3, lambda_factor=1, frontier_bias=0.7):
+        
+        AMOUNT_LEVELS = 2
+        AMOUNT_BRANCH = 2
+
+        # generate the tree based on the amount of levels --> depth
+        # and th eamount of branch --> new nodes from each of the nodes
+        # the root_node is the root node of the tree
+        tree = []
+        tree.append([root_node])
+        for i in range(AMOUNT_LEVELS):
+            print("tree level", i, "nodes", len(tree[i]), "vals", tree[i])
+            for parent in tree[i]:
+                print("Parent node:", parent.x, parent.y)
+
+                limit_angle = [0, 2*math.pi]
+                if(i > 0):
+                    limit_angle = [0, math.pi]
 
 
-    def compute_information_gain_rrt(self, root_node, max_depth=2, max_distance=3, lambda_factor=0.1):
+                generated_valid_nodes = self.generate_random_nodes_valid(parent, AMOUNT_BRANCH, angle_limit=limit_angle)
+                print("generated valid nodes", len(generated_valid_nodes))
+
+                for node in generated_valid_nodes:
+                    # Calculate the cost (Euclidean distance) from the parent node
+                    cost = math.sqrt((node.x - parent.x) ** 2 + (node.y - parent.y) ** 2)
+                    # Calculate the visible unknown cells
+                    grid_node = GridNode(node.x, node.y)
+                    visible_unknown = self.compute_visible_unknown(grid_node, max_distance)
+                    # Apply the gain formula with the discounting factor
+                    gain = parent.gain + visible_unknown * math.exp(-lambda_factor * cost)
+                    node.gain = gain
+
+                tree.append(generated_valid_nodes)
+
+        # convert the tree to a 1D list
+        tree_1d = []
+        for i in range(len(tree)):
+            for j in range(len(tree[i])):
+                tree_1d.append(tree[i][j])
+    
+        #visualize the tree
+        self.visualize_tree(tree_1d)
+        exit()
+
+
+    def compute_information_gain_rrt(self, root_node, max_depth=2, max_distance=3, lambda_factor=1):
         """
         Compute information gain using a tree-based exploration (RRT) with a discounting factor.
         
