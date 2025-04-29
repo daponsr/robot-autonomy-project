@@ -291,7 +291,7 @@ class ExploratorNode(Node):
         print("Root node:", (root_node.x, root_node.y))
         # best_node = self.compute_information_gain_rrt(root_node)
         # best_node = self.compute_information_gain_rrt_frontier(root_node)
-        self.compute_information_gain_rrt_easy(root_node)
+        best_node = self.compute_information_gain_rrt_easy(root_node)
         path_to_best_node = self.reconstruct_path(best_node)
         print("Path to best node:", path_to_best_node)
 
@@ -484,6 +484,10 @@ class ExploratorNode(Node):
             print("Adding new nodes to the tree", len(new_nodes))
             tree.extend(new_nodes)
 
+        # compute 
+
+
+
         # Visualize the tree
         self.visualize_tree(tree)
 
@@ -493,12 +497,19 @@ class ExploratorNode(Node):
         generate_nodes = []
         while(len(generate_nodes) < amount):
             # generate a random node
-            new_x = random.uniform(root.x - max_distance, root.x + max_distance)
-            new_y = random.uniform(root.y - max_distance, root.y + max_distance)
-            # compute the agle from the root to the node
-            angle = math.atan2(new_y - root.y, new_x - root.x)
+            # new_x = random.uniform(root.x - max_distance, root.x + max_distance)
+            # new_y = random.uniform(root.y - max_distance, root.y + max_distance)
+
+            angle = random.uniform(angle_limit[0], angle_limit[1])
+            distance = random.uniform(0, max_distance)
+            print("angle", angle)
+
             if(angle < angle_limit[0] or angle > angle_limit[1]):
-                continue
+                    continue
+
+            # convert to next_x and next_y
+            new_x = root.x + distance * math.cos(angle)
+            new_y = root.y + distance * math.sin(angle)
 
             # check if the node is valid
             col = int((new_x - self.latest_map_msg.info.origin.position.x) / self.latest_map_msg.info.resolution)
@@ -515,7 +526,7 @@ class ExploratorNode(Node):
 
     def compute_information_gain_rrt_easy(self, root_node, max_depth=2, max_distance=3, lambda_factor=1, frontier_bias=0.7):
         
-        AMOUNT_LEVELS = 2
+        AMOUNT_LEVELS = 3
         AMOUNT_BRANCH = 2
 
         # generate the tree based on the amount of levels --> depth
@@ -523,15 +534,18 @@ class ExploratorNode(Node):
         # the root_node is the root node of the tree
         tree = []
         tree.append([root_node])
+
+        best_node = root_node
+        best_gain = 0
+
         for i in range(AMOUNT_LEVELS):
             print("tree level", i, "nodes", len(tree[i]), "vals", tree[i])
             for parent in tree[i]:
                 print("Parent node:", parent.x, parent.y)
 
                 limit_angle = [0, 2*math.pi]
-                if(i > 0):
-                    limit_angle = [0, math.pi]
-
+                # if(i > 0):
+                #     limit_angle = [0, math.pi]
 
                 generated_valid_nodes = self.generate_random_nodes_valid(parent, AMOUNT_BRANCH, angle_limit=limit_angle)
                 print("generated valid nodes", len(generated_valid_nodes))
@@ -545,8 +559,26 @@ class ExploratorNode(Node):
                     # Apply the gain formula with the discounting factor
                     gain = parent.gain + visible_unknown * math.exp(-lambda_factor * cost)
                     node.gain = gain
+                    node.parent = parent
+                    if(node.gain > best_gain):
+                        best_gain = node.gain
+                        best_node = node
 
                 tree.append(generated_valid_nodes)
+
+        # opbtain the parents all the way to the root node from the "best_node"
+
+        parents_list = []
+        parent = best_node.parent
+        actual_node = best_node
+        while(actual_node.parent != root_node):
+            parents_list.append(actual_node.parent)
+            best_node = actual_node
+            actual_node = actual_node.parent
+            print("actual node", actual_node.x, actual_node.y)
+        print("found")
+
+        # compute the gain of every path
 
         # convert the tree to a 1D list
         tree_1d = []
@@ -556,7 +588,7 @@ class ExploratorNode(Node):
     
         #visualize the tree
         self.visualize_tree(tree_1d)
-        exit()
+        return best_node
 
 
     def compute_information_gain_rrt(self, root_node, max_depth=2, max_distance=3, lambda_factor=1):
